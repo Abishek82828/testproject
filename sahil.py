@@ -91,12 +91,6 @@ def send_welcome(message):
 def help_command(message):
     help_text = """
     Available commands:
-    /start - Welcome message
-    /help - Show this help message
-    /blocklist <add/remove> <user_id> - Manage the blocklist (Admin only)
-    /status - Check the status of active attacks
-    /end - Stop your active attacks
-    /feedback <your feedback> - Submit feedback or suggestions
     /id - Show your user ID
     """
     bot.send_message(message.chat.id, help_text)
